@@ -1,0 +1,97 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: ueba-postgres  # 이 이름이 중요합니다!
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=Suju!0901
+      - POSTGRES_DB=ueba_db
+      - TZ=Asia/Seoul
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    networks:
+      - ueba-net
+      
+  # 1. Elasticsearch (데이터 저장소)
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.2
+    container_name: ueba-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - TZ=Asia/Seoul
+    ports:
+      - "9200:9200"
+    volumes:
+      - ./data/elasticsearch:/usr/share/elasticsearch/data
+    networks:
+      - ueba-net
+
+  # 2. Kibana (시각화)
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.12.2
+    container_name: ueba-kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=["http://ueba-elasticsearch:9200"]
+    ports:
+      - "5601:5601"
+    networks:
+      - ueba-net
+    depends_on:
+      - elasticsearch
+
+  # 3. Spark (수집 엔진)
+  spark:
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
+    image: ueba-spark-custom:latest
+    container_name: ueba-spark
+    user: root
+    command: tail -f /dev/null
+    environment:
+      - TZ=Asia/Seoul
+      # ★ DB 접속 정보는 오직 이 파일에서만 관리합니다
+      - CONFIG_FILE_PATH=/UEBA/config/db_sources.json
+      # ES는 내부망으로 통신
+      - TARGET_ES_HOST=ueba-elasticsearch
+      - TARGET_ES_PORT=9200
+    volumes:
+      - .:/UEBA  # 소스코드 및 설정파일 마운트
+      - /etc/localtime:/etc/localtime:ro
+    ports:
+      - "4040:4040"
+    networks:
+      - ueba-net
+
+  # 4. Scheduler (주기적 실행)
+  scheduler:
+    image: mcuadros/ofelia:latest
+    container_name: ueba-scheduler
+    restart: always
+    depends_on:
+      - spark
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - ueba-net
+    command: daemon --docker
+    labels:
+      ofelia.enabled: "true"
+      ofelia.job-exec.ueba-job.schedule: "@every 5m"
+      ofelia.job-exec.ueba-job.container: "ueba-spark"
+      ofelia.job-exec.ueba-job.no-overlap: "true"
+      ofelia.job-exec.ueba-job.command: >
+        /opt/spark/bin/spark-submit 
+        --master local[*] 
+        /UEBA/main.py
+
+networks:
+  ueba-net:
+    driver: bridge

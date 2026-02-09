@@ -1,0 +1,14 @@
+[
+  {
+    "name": "Local_Postgres",
+    "type": "postgres",
+    "host": "ueba-postgres",
+    "port": 5432,
+    "user": "admin",
+    "password": "YOUR_PASSWORD_HERE",
+    "db_name": "ueba_db",
+    "query": "SELECT * FROM employees",
+    "id_fields": ["id"],
+    "target_index_suffix": "postgres-logs"
+  }
+]

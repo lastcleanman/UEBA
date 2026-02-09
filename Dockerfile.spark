@@ -1,0 +1,38 @@
+# Dockerfile.spark
+FROM apache/spark:3.4.1
+
+USER root
+
+# 1. 시스템 패키지 설치 (의존성 추가)
+# - build-essential: 컴파일 도구
+# - freetds-dev: MSSQL 접속 드라이버 헤더
+# - libkrb5-dev: Kerberos 인증 라이브러리 (링크 에러 해결용)
+# - libssl-dev: SSL 암호화 라이브러리 (링크 에러 해결용)
+# - python3-dev: Python 헤더
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    freetds-dev \
+    libkrb5-dev \
+    libssl-dev \
+    python3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. 빌드 도구 버전 고정
+# - Cython<3.0: 호환성 문제 해결
+# - setuptools_scm<8.0: 빌드 메타데이터 생성 도구
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir "Cython<3.0" "setuptools_scm<8.0"
+
+# 3. 라이브러리 설치
+# --no-build-isolation: 미리 설치한 Cython 사용 강제
+RUN pip install --no-cache-dir --no-build-isolation pymssql && \
+    pip install --no-cache-dir \
+    pandas \
+    sqlalchemy \
+    psycopg2-binary \
+    pymysql \
+    oracledb \
+    elasticsearch==8.12.1 \
+    pyarrow
+
+# USER spark
