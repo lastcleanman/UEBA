@@ -15,7 +15,7 @@ services:
       - ./data/postgres:/var/lib/postgresql/data
     networks:
       - ueba-net
-      
+
   # 1. Elasticsearch (데이터 저장소)
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.12.2
@@ -47,6 +47,10 @@ services:
 
   # 3. Spark (수집 엔진)
   spark:
+    deploy:
+      resources:
+        limits:
+          memory: 2G  # EPC 5,000명 미만 Model S 기준 권장
     build:
       context: .
       dockerfile: Dockerfile.spark
@@ -56,6 +60,8 @@ services:
     command: tail -f /dev/null
     environment:
       - TZ=Asia/Seoul
+      - SPARK_DRIVER_MEMORY=1G
+      - SPARK_EXECUTOR_MEMORY=1G
       # ★ DB 접속 정보는 오직 이 파일에서만 관리합니다
       - CONFIG_FILE_PATH=/UEBA/config/db_sources.json
       # ES는 내부망으로 통신
@@ -76,6 +82,9 @@ services:
     restart: always
     depends_on:
       - spark
+    # .env 파일을 읽어오도록 명시 (선택사항이나 명시적인 것이 좋음)
+    env_file:
+      - .env
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /etc/localtime:/etc/localtime:ro
@@ -84,7 +93,9 @@ services:
     command: daemon --docker
     labels:
       ofelia.enabled: "true"
-      ofelia.job-exec.ueba-job.schedule: "@every 5m"
+      # ★ 수정된 부분: ${변수명} 형태로 변경
+      # :- 뒤에 있는 값은 .env 파일이 없을 때 사용할 기본값입니다.
+      ofelia.job-exec.ueba-job.schedule: "${SCHEDULER_INTERVAL:-@every 5m}"
       ofelia.job-exec.ueba-job.container: "ueba-spark"
       ofelia.job-exec.ueba-job.no-overlap: "true"
       ofelia.job-exec.ueba-job.command: >

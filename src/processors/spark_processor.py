@@ -1,27 +1,51 @@
-from pyspark.sql import DataFrame
-from pyspark.sql.functions import current_timestamp
+from pyspark.sql.functions import col, current_timestamp, when, lit
 
 class SparkDataProcessor:
     def __init__(self, spark):
         self.spark = spark
 
-    def process_asset_logs(self, df):
+    def process_for_alerts(self, spark_df, source_name):
         """
-        여기가 진짜 '가공(Transform)'이 일어나는 곳입니다.
+        [설계서 3.4] RDB 충돌 원천 제거 및 UML 통합 로직
         """
-        #print("   >>> [Spark Logic] 데이터 변환 로직 적용 중...")
+        if spark_df is None or spark_df.count() == 0:
+            return None
 
-        # 1. 이름 마스킹 (예: '홍길동' -> '홍**')
-        # name_kr 컬럼의 첫 글자만 따고 뒤에 '**' 붙임
-        #df = df.withColumn("masked_name", 
-        #                   concat(substring(col("name_kr"), 1, 1), lit("**")))
+        print(f"   ... [Processing] '{source_name}' 시스템 필드 충돌 완벽 차단 중 ...")
 
-        # 2. 근무 일수 계산 (현재 날짜 - 입사일)
-        # birth_date를 입사일이라고 가정하고 예시 작성 (실제 컬럼명에 맞춰 수정 필요)
-        # 만약 birth_date가 문자열이면 to_date() 변환 필요
-        #df = df.withColumn("days_since_birth", 
-        #                   datediff(current_date(), col("birth_date")))
+        # 1. 표준 필드 매핑 선 수행 (id -> user_id)
+        # 원본 id가 ES의 '_id' 메타 필드와 겹치지 않도록 이름을 먼저 바꿉니다.
+        mapping_table = {
+            "id": "user_id",
+            "employee_id": "user_id",
+            "ip": "src_ip",
+            "user_ip": "src_ip",
+            "source_addr": "src_ip"
+        }
+        
+        for raw, std in mapping_table.items():
+            if raw in spark_df.columns:
+                if std not in spark_df.columns:
+                    spark_df = spark_df.withColumnRenamed(raw, std)
+                else:
+                    # 중복 필드인 경우 원본 제거 (ES 충돌 방지 핵심)
+                    spark_df = spark_df.drop(raw)
 
-        # 3. 특정 부서 필터링 (예: 인사팀 데이터만 남기기 등 - 테스트용 주석)
-        # df = df.filter(col("dept_code") == "HR")
-        return df
+        # 2. 모든 필드 문자열 캐스팅 (매핑 에러 방지)
+        for field in spark_df.schema.fields:
+            spark_df = spark_df.withColumn(field.name, col(field.name).cast("string"))
+
+        # 3. 출처 태깅 및 유효성 검증
+        spark_df = spark_df.withColumn("log_source", lit(source_name))
+        
+        # 유효한 IP 형식만 통과 (Garbage In 차단)
+        if "src_ip" in spark_df.columns:
+            spark_df = spark_df.filter(col("src_ip").rlike(r"(\d{1,3}\.){3}\d{1,3}"))
+
+        # 4. 보안 마스킹 및 타임스탬프 주입
+        if "user_id" in spark_df.columns:
+            spark_df = spark_df.withColumn("user_id_masked", 
+                                          when(col("user_id").isNotNull(), "****")
+                                          .otherwise("unknown"))
+
+        return spark_df.withColumn("event_time", current_timestamp())
