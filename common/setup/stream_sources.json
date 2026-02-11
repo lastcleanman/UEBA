@@ -1,0 +1,9 @@
+[
+  {
+    "name": "Kafka_Realtime_Logs",
+    "type": "kafka",
+    "brokers": "localhost:9092",
+    "topic": "security_logs",
+    "enabled": false
+  }
+]

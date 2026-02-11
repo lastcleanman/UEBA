@@ -1,0 +1,9 @@
+[
+  {
+    "name": "Firewall_Traffic_Logs",
+    "type": "file",
+    "path": "/UEBA/data/logs/firewall_traffic.log",
+    "pattern": ".*?end_time=\"(?P<final_ts>.*?)\" duration=\"(?P<duration>.*?)\" .*?src_ip=(?P<src_ip>.*?) user_id=(?P<user_id>.*?) src_port=(?P<src_port>\\d+) dst_ip=(?P<dst_ip>.*?) dst_port=(?P<dst_port>\\d+) protocol=(?P<protocol>.*?) app_name=(?P<action>.*?) packets_total=(?P<packets_total>\\d+) bytes_total=(?P<bytes_total>\\d+)",
+    "enabled": true
+  }
+]

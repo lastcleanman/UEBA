@@ -1,29 +1,30 @@
-version: '3.8'
-
 services:
-  postgres:
-    image: postgres:15
-    container_name: ueba-postgres  # 이 이름이 중요합니다!
-    environment:
-      - POSTGRES_USER=admin
-      - POSTGRES_PASSWORD=Suju!0901
-      - POSTGRES_DB=ueba_db
-      - TZ=Asia/Seoul
-    ports:
-      - "5433:5432"
+  # 1. Spark 및 파이프라인 실행 컨테이너 (공식 이미지로 교체)
+  ueba-spark:
+    container_name: ueba-spark
+    image: apache/spark:3.5.0
+    user: root
     volumes:
-      - ./data/postgres:/var/lib/postgresql/data
+      - .:/UEBA
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - TZ=Asia/Seoul
+      - PYTHONPATH=/UEBA             # [핵심] 모듈 인식 에러 방지
+      - TARGET_ES_HOST=ueba-elasticsearch
+      - TARGET_ES_PORT=9200
+      - CONFIG_DIR=/UEBA/common/setup # [핵심] 설정파일 폴더 경로
     networks:
       - ueba-net
+    command: tail -f /dev/null
 
-  # 1. Elasticsearch (데이터 저장소)
-  elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.2
+  # 2. Elasticsearch (데이터 저장소)
+  ueba-elasticsearch:
     container_name: ueba-elasticsearch
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.2
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
-      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g" 
       - TZ=Asia/Seoul
     ports:
       - "9200:9200"
@@ -31,77 +32,53 @@ services:
       - ./data/elasticsearch:/usr/share/elasticsearch/data
     networks:
       - ueba-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  # 2. Kibana (시각화)
-  kibana:
-    image: docker.elastic.co/kibana/kibana:8.12.2
+  # 3. Kibana (시각화)
+  ueba-kibana:
     container_name: ueba-kibana
+    image: docker.elastic.co/kibana/kibana:8.12.2
     environment:
-      - ELASTICSEARCH_HOSTS=["http://ueba-elasticsearch:9200"]
+      - ELASTICSEARCH_HOSTS=http://ueba-elasticsearch:9200
+      - I18N_LOCALE=ko-KR
     ports:
       - "5601:5601"
     networks:
       - ueba-net
     depends_on:
-      - elasticsearch
+      ueba-elasticsearch:
+        condition: service_healthy
 
-  # 3. Spark (수집 엔진)
-  spark:
-    deploy:
-      resources:
-        limits:
-          memory: 2G  # EPC 5,000명 미만 Model S 기준 권장
-    build:
-      context: .
-      dockerfile: Dockerfile.spark
-    image: ueba-spark-custom:latest
-    container_name: ueba-spark
-    user: root
-    command: tail -f /dev/null
+  # 4. MariaDB (인사/HR 데이터베이스)
+  ueba-mariadb:
+    container_name: ueba-mariadb
+    image: mariadb:10.6
     environment:
-      - TZ=Asia/Seoul
-      - SPARK_DRIVER_MEMORY=1G
-      - SPARK_EXECUTOR_MEMORY=1G
-      # ★ DB 접속 정보는 오직 이 파일에서만 관리합니다
-      - CONFIG_FILE_PATH=/UEBA/config/db_sources.json
-      # ES는 내부망으로 통신
-      - TARGET_ES_HOST=ueba-elasticsearch
-      - TARGET_ES_PORT=9200
-    volumes:
-      - .:/UEBA  # 소스코드 및 설정파일 마운트
-      - /etc/localtime:/etc/localtime:ro
+      - MYSQL_ROOT_PASSWORD=Suju!0901
+      - MYSQL_DATABASE=UEBA_TEST
+      - MYSQL_USER=ueba_user
+      - MYSQL_PASSWORD=Suju!0901
     ports:
-      - "4040:4040"
+      - "13306:3306"
     networks:
       - ueba-net
 
-  # 4. Scheduler (주기적 실행)
-  scheduler:
-    image: mcuadros/ofelia:latest
-    container_name: ueba-scheduler
-    restart: always
-    depends_on:
-      - spark
-    # .env 파일을 읽어오도록 명시 (선택사항이나 명시적인 것이 좋음)
-    env_file:
-      - .env
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /etc/localtime:/etc/localtime:ro
+  # 5. Postgres (기존 수집 대상)
+  ueba-postgres:
+    container_name: ueba-postgres
+    image: postgres:15
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=Suju!0901
+      - POSTGRES_DB=ueba_db
+    ports:
+      - "5433:5432"
     networks:
       - ueba-net
-    command: daemon --docker
-    labels:
-      ofelia.enabled: "true"
-      # ★ 수정된 부분: ${변수명} 형태로 변경
-      # :- 뒤에 있는 값은 .env 파일이 없을 때 사용할 기본값입니다.
-      ofelia.job-exec.ueba-job.schedule: "${SCHEDULER_INTERVAL:-@every 5m}"
-      ofelia.job-exec.ueba-job.container: "ueba-spark"
-      ofelia.job-exec.ueba-job.no-overlap: "true"
-      ofelia.job-exec.ueba-job.command: >
-        /opt/spark/bin/spark-submit 
-        --master local[*] 
-        /UEBA/main.py
 
 networks:
   ueba-net:

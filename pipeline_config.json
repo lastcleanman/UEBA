@@ -1,0 +1,12 @@
+{
+  "pipeline_name": "UEBA_Plugin_Pipeline",
+  "active_plugins": {
+    "detection": [
+      "plugins.detection.rule_based"
+    ],
+    "loading": [
+      "plugins.loading.elastic"
+    ],
+    "notification": []
+  }
+}

@@ -1,0 +1,9 @@
+[
+  {
+    "name": "AWS_S3_Audit_Logs",
+    "type": "s3",
+    "bucket": "ueba-audit-logs",
+    "prefix": "2026/",
+    "enabled": false
+  }
+]

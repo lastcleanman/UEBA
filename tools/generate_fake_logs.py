@@ -1,69 +1,136 @@
 import os
+import json
+import pandas as pd
+from datetime import datetime, timedelta
 import random
-import time
-from datetime import datetime
+from sqlalchemy import create_engine
 
-# 저장 경로 (프로젝트 루트의 data/logs 폴더에 저장)
-# Docker는 이 폴더를 마운트해서 읽습니다.
-LOG_DIR = "data/logs"
-LOG_FILE = os.path.join(LOG_DIR, "server_auth.log")
+LOG_DIR = "/UEBA/data/logs"
+os.makedirs(LOG_DIR, exist_ok=True)
 
-if not os.path.exists(LOG_DIR):
-    os.makedirs(LOG_DIR)
+# =====================================================================
+# 💡 [로그 포맷 템플릿 설정]
+# 나중에 포맷을 바꾸고 싶다면 아래 문자열의 모양만 마음대로 수정하시면 됩니다!
+# 중괄호 {} 안의 값은 코드가 실행될 때 자동으로 실제 데이터로 치환됩니다.
+# =====================================================================
+FW_LOG_TEMPLATE = (
+    "[{action}] [{src_ip}] start_time=\"{timestamp}\" end_time=\"{end_time}\" duration=\"{duration}\" "
+    "machine_name={machine_name} fw_rule_id={fw_rule_id} src_ip={src_ip} user_id={user_id} "
+    "src_port={src_port} dst_ip={dst_ip} dst_port={dst_port} protocol={protocol} "
+    "app_name={app_name} packets_total={packets} bytes_total={bytes}"
+)
 
-# 가짜 데이터 소스
-USERS = ['root', 'admin', 'developer', 'kdw', 'unknown_user']
-IPS = ['192.168.0.10', '192.168.0.25', '10.0.0.5', '203.0.113.42'] 
-ACTIONS = [
-    "Accepted password for",
-    "Failed password for",
-    "Disconnected from",
-    "sudo: session opened for user root",
-    "sudo: session closed for user root"
-]
 
-def generate_log_line():
-    """Linux Auth Log 형식의 한 줄 생성"""
-    # 로그 포맷: Feb 10 15:30:01 hostname process: message
-    now = datetime.now().strftime('%b %d %H:%M:%S')
-    hostname = "ueba-server-01"
-    
-    user = random.choice(USERS)
-    ip = random.choice(IPS)
-    action = random.choice(ACTIONS)
-    
-    # 시나리오: 'Failed'일 때는 해커일 확률 높임
-    if "Failed" in action and random.random() < 0.3:
-        user = "hacker"
-
-    # 메시지 조합
-    if "sudo" in action:
-        message = f"{action} by {user}"
-        process = "sudo"
-    else:
-        message = f"{action} {user} from {ip} port {random.randint(30000, 60000)} ssh2"
-        process = f"sshd[{random.randint(1000, 9999)}]"
-
-    return f"{now} {hostname} {process}: {message}\n"
-
-def main():
-    print(f">>> [Start] 가짜 로그 생성 시작: {LOG_FILE}")
-    print(">>> Ctrl+C를 누르면 중단됩니다.")
-    
+def fetch_real_users():
+    """MariaDB의 sj_ueba_hr 테이블에서 실제 사번, 부서명, 할당 IP를 가져옵니다."""
     try:
-        while True:
-            with open(LOG_FILE, "a", encoding="utf-8") as f:
-                # 한 번에 1~5개 로그 생성
-                for _ in range(random.randint(1, 5)):
-                    line = generate_log_line()
-                    f.write(line)
-                    print(line.strip()) # 화면에도 출력
+        config_path = "/UEBA/common/setup/db_sources.json"
+        with open(config_path, "r", encoding="utf-8") as f:
+            sources = json.load(f)
+        
+        maria_conf = next((s for s in sources if s["name"] == "ueba_mariaDB"), None)
+        if not maria_conf:
+            raise ValueError("MariaDB 설정(ueba_mariaDB)을 찾을 수 없습니다.")
+
+        url = f"mysql+pymysql://{maria_conf['user']}:{maria_conf['password']}@{maria_conf['host']}:{maria_conf['port']}/{maria_conf['db_name']}"
+        engine = create_engine(url)
+        
+        query = "SELECT emp_id AS user_id, dept_name AS department, static_ip AS src_ip FROM sj_ueba_hr WHERE emp_id IS NOT NULL"
+        df = pd.read_sql(query, engine)
+
+        valid_users = []
+        for _, row in df.iterrows():
+            uid = row['user_id']
+            dept = row['department'] if pd.notna(row['department']) else 'Unknown_Dept'
+            ip = row['src_ip'] if pd.notna(row['src_ip']) and str(row['src_ip']).strip() != "" else f"192.168.1.{random.randint(2, 254)}"
             
-            # 1~3초 대기 (실시간성 시뮬레이션)
-            time.sleep(random.randint(1, 3))
+            valid_users.append({"user_id": str(uid), "department": str(dept), "src_ip": str(ip)})
             
-    except KeyboardInterrupt:
-        print("\n>>> [Stop] 로그 생성 중단")
+        print(f"✅ MariaDB 연동 성공: 총 {len(valid_users)}명의 실제 직원 정보를 불러왔습니다.")
+        return valid_users
+    except Exception as e:
+        print(f"❌ DB 연동 실패: {e} (기본 가상 데이터로 진행합니다.)")
+        return [{"user_id": f"user{i:03d}", "department": "Sales", "src_ip": f"192.168.1.{i+10}"} for i in range(1, 11)]
+
+
+def generate_custom_format_logs(valid_users):
+    """요청하신 Key-Value 포맷 템플릿을 사용하여 방화벽 스타일 로그를 대량 생성합니다."""
+    log_lines = []
+    now = datetime.now()
+    
+    # 1. [정상] 모든 직원이 무작위로 1~10번씩 방화벽 로그를 발생시킴 (대용량)
+    for user in valid_users:
+        # 각 직원당 1건 ~ 10건의 정상 로그를 무작위로 생성
+        for _ in range(random.randint(1, 10)):
+            ts = now - timedelta(hours=random.randint(1, 72)) # 최근 3일 치 데이터
+            duration = random.randint(1, 120)
+            
+            log_data = {
+                "action": random.choice(["fw4_allow", "fw4_allow", "fw6_allow"]),
+                "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
+                "end_time": (ts + timedelta(seconds=duration)).strftime("%Y-%m-%d %H:%M:%S"),
+                "duration": duration,
+                "machine_name": "FW-Core-01",
+                "fw_rule_id": f"Rule_{random.randint(10, 50)}",
+                "src_ip": user["src_ip"],
+                "user_id": user["user_id"],
+                "src_port": random.randint(10000, 60000),
+                "dst_ip": f"10.10.10.{random.randint(1, 50)}",
+                "dst_port": random.choice([80, 443, 8080]),
+                "protocol": "TCP",
+                "app_name": random.choice(["Web-Browsing", "Office365", "Slack"]),
+                "packets": random.randint(10, 500),
+                "bytes": random.randint(1024, 50000)
+            }
+            log_lines.append(FW_LOG_TEMPLATE.format(**log_data))
+
+    # 2. [위협] 비업무 시간(새벽) 대용량 DB 접근 및 파일 유출 시나리오
+    # 3,000명 중 3명의 내부자를 무작위로 타겟팅하여 위협 로그 생성
+    target_users = random.sample(valid_users, 3) 
+    weekend_time = now - timedelta(days=now.weekday() + 1)
+    
+    for target_user in target_users:
+        night_time = weekend_time.replace(hour=random.randint(1, 4), minute=random.randint(0, 59), second=0)
+        
+        # 내부자 1명당 5번의 대용량 유출 시도 로그 생성
+        for i in range(5):
+            ts = night_time + timedelta(minutes=i*5)
+            duration = random.randint(300, 600)
+            
+            log_data = {
+                "action": "fw4_allow",
+                "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
+                "end_time": (ts + timedelta(seconds=duration)).strftime("%Y-%m-%d %H:%M:%S"),
+                "duration": duration,
+                "machine_name": "FW-Core-01",
+                "fw_rule_id": "Rule_99_DB_Access",
+                "src_ip": target_user["src_ip"],
+                "user_id": target_user["user_id"],
+                "src_port": random.randint(50000, 60000),
+                "dst_ip": "192.168.100.10", # 핵심 DB 서버 IP
+                "dst_port": 1521,
+                "protocol": "TCP",
+                "app_name": "Oracle-DB-Connect",
+                "packets": random.randint(10000, 50000),
+                "bytes": random.randint(5000000, 20000000) # 대용량 데이터 전송 (유출)
+            }
+            log_lines.append(FW_LOG_TEMPLATE.format(**log_data))
+
+    # 파일 저장 부분
+    file_path = os.path.join(LOG_DIR, "firewall_traffic.log")
+    with open(file_path, "w", encoding="utf-8") as f:
+        for line in log_lines:
+            f.write(line + "\n")
+            
+    print(f"✅ [생성 완료] 방화벽 트래픽 로그: {file_path} ({len(log_lines):,}건)")
+
 
 if __name__ == "__main__":
-    main()
+    print("====== 가상 보안 위협 로그 생성을 시작합니다 ======")
+    valid_users_list = fetch_real_users()
+    
+    if valid_users_list:
+        # 방화벽 포맷 로그 생성 실행
+        generate_custom_format_logs(valid_users_list)
+        
+    print("====== 가상 로그 생성 완료 ======")
