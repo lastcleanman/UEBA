@@ -84,36 +84,39 @@ def generate_custom_format_logs(valid_users):
             }
             log_lines.append(FW_LOG_TEMPLATE.format(**log_data))
 
-    # 2. [위협] 비업무 시간(새벽) 대용량 DB 접근 및 파일 유출 시나리오
-    # 3,000명 중 3명의 내부자를 무작위로 타겟팅하여 위협 로그 생성
-    target_users = random.sample(valid_users, 3) 
+    # =================================================================
+    # 🚨 [위협 강화] SOC 시연용 4대 치명적 해킹 시나리오 강제 주입
+    # =================================================================
+    target_users = random.sample(valid_users, min(5, len(valid_users))) # 타겟 5명 선정
     weekend_time = now - timedelta(days=now.weekday() + 1)
     
-    for target_user in target_users:
+    for i, target_user in enumerate(target_users):
         night_time = weekend_time.replace(hour=random.randint(1, 4), minute=random.randint(0, 59), second=0)
         
-        # 내부자 1명당 5번의 대용량 유출 시도 로그 생성
-        for i in range(5):
-            ts = night_time + timedelta(minutes=i*5)
-            duration = random.randint(300, 600)
-            
-            log_data = {
-                "action": "fw4_allow",
-                "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
-                "end_time": (ts + timedelta(seconds=duration)).strftime("%Y-%m-%d %H:%M:%S"),
-                "duration": duration,
-                "machine_name": "FW-Core-01",
-                "fw_rule_id": "Rule_99_DB_Access",
-                "src_ip": target_user["src_ip"],
-                "user_id": target_user["user_id"],
-                "src_port": random.randint(50000, 60000),
-                "dst_ip": "192.168.100.10", # 핵심 DB 서버 IP
-                "dst_port": 1521,
-                "protocol": "TCP",
-                "app_name": "Oracle-DB-Connect",
-                "packets": random.randint(10000, 50000),
-                "bytes": random.randint(5000000, 20000000) # 대용량 데이터 전송 (유출)
-            }
+        # 1. 랜섬웨어/C2 서버 비인가 통신 (Reverse Shell)
+        if i == 0:
+            for j in range(3):
+                ts = night_time + timedelta(minutes=j*2)
+                log_data = {"action": "fw6_drop", "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"), "end_time": (ts + timedelta(seconds=5)).strftime("%Y-%m-%d %H:%M:%S"), "duration": 5, "machine_name": "FW-Core-01", "fw_rule_id": "Rule_Block_C2", "src_ip": target_user["src_ip"], "user_id": target_user["user_id"], "src_port": 4444, "dst_ip": "185.10.10.2", "dst_port": 4444, "protocol": "TCP", "app_name": "Reverse_Shell_C2", "packets": 500, "bytes": 15000}
+                log_lines.append(FW_LOG_TEMPLATE.format(**log_data))
+
+        # 2. 내부자 대규모 기밀 유출 (FTP/클라우드 대용량 전송)
+        elif i == 1:
+            ts = night_time + timedelta(minutes=15)
+            log_data = {"action": "fw4_allow", "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"), "end_time": (ts + timedelta(seconds=1800)).strftime("%Y-%m-%d %H:%M:%S"), "duration": 1800, "machine_name": "FW-Core-01", "fw_rule_id": "Rule_Bypass", "src_ip": target_user["src_ip"], "user_id": target_user["user_id"], "src_port": 55112, "dst_ip": "104.20.15.10", "dst_port": 21, "protocol": "TCP", "app_name": "Massive_FTP_Exfiltration", "packets": 999999, "bytes": 8500000000}
+            log_lines.append(FW_LOG_TEMPLATE.format(**log_data))
+
+        # 3. 무차별 대입 공격 (SSH Brute Force)
+        elif i == 2:
+            for j in range(50): # 50번 연속 실패 (로그 도배)
+                ts = night_time + timedelta(seconds=j*2)
+                log_data = {"action": "fw4_drop", "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"), "end_time": (ts + timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S"), "duration": 1, "machine_name": "FW-Core-01", "fw_rule_id": "Rule_SSH", "src_ip": target_user["src_ip"], "user_id": target_user["user_id"], "src_port": random.randint(30000, 60000), "dst_ip": "192.168.10.5", "dst_port": 22, "protocol": "TCP", "app_name": "SSH_BruteForce", "packets": 10, "bytes": 512}
+                log_lines.append(FW_LOG_TEMPLATE.format(**log_data))
+
+        # 4. DB 덤프 및 권한 상승 시도
+        else:
+            ts = night_time + timedelta(minutes=30)
+            log_data = {"action": "fw4_allow", "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"), "end_time": (ts + timedelta(seconds=600)).strftime("%Y-%m-%d %H:%M:%S"), "duration": 600, "machine_name": "FW-Core-01", "fw_rule_id": "Rule_DB_Dump", "src_ip": target_user["src_ip"], "user_id": target_user["user_id"], "src_port": random.randint(40000, 50000), "dst_ip": "192.168.100.10", "dst_port": 1521, "protocol": "TCP", "app_name": "Unauthorized_DB_Dump", "packets": 50000, "bytes": 2000000000}
             log_lines.append(FW_LOG_TEMPLATE.format(**log_data))
 
     # 파일 저장 부분

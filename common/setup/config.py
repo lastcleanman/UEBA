@@ -1,8 +1,14 @@
 import os
 
-ES_HOST = os.getenv("TARGET_ES_HOST", "ueba-elasticsearch")
-ES_PORT = int(os.getenv("TARGET_ES_PORT", 9200))
+# 컨테이너 이름 사용
+ES_HOST = "ueba-elasticsearch"
+ES_PORT = 9200
 ES_INDEX_NAME = "ueba-alerts"
 
-# [수정] 단일 파일이 아닌 설정 파일들이 모인 '디렉토리(폴더) 경로'로 변경
-CONFIG_DIR = os.getenv("CONFIG_DIR", "/UEBA/common/setup")
+# Spark 설정
+SPARK_APP_NAME = "UEBA-Pipeline"
+SPARK_MASTER = "local[*]"
+
+# [수정됨] 설정 파일들이 위치한 실제 경로 지정
+BASE_DIR = "/UEBA"
+CONFIG_DIR = os.path.join(BASE_DIR, "common/setup")

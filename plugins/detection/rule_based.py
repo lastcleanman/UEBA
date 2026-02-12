@@ -1,33 +1,32 @@
-from pyspark.sql.functions import col, when, hour, dayofweek
+from pyspark.sql.functions import col, when, lit
 from common.setup.logger import get_logger
 
 logger = get_logger("Plugin-RuleEngine")
 
 def execute(df):
-    """(필수 인터페이스) 데이터프레임을 받아 처리 후 반환"""
     logger.info("탐지 룰셋(Rule-based) 적용 중...")
     
-    df = df.withColumn("day_of_week", dayofweek(col("timestamp")))
-    df = df.withColumn("hour_of_day", hour(col("timestamp")))
+    # 1. 기본 점수 및 메시지 세팅 (기본 10점)
+    if "risk_score" not in df.columns:
+        df = df.withColumn("risk_score", lit(10.0))
+    if "alert_message" not in df.columns:
+        df = df.withColumn("alert_message", lit("Info: 정상 업무 활동"))
 
-    is_weekend = col("day_of_week").isin([1, 7])
-    is_night = (col("hour_of_day") < 9) | (col("hour_of_day") > 19)
-    is_off_hours = is_weekend | is_night
-    is_sensitive_action = col("action").isin(["db_access", "file_download"])
-
-    df = df.withColumn("risk_score", 
-        when(col("user_id").startswith("GH_"), 100.0)
-        .when(col("action") == "sudo_exec", 90.0)
-        .when(is_off_hours & is_sensitive_action, 85.0)
-        .when(col("action") == "login_fail", 50.0)
-        .otherwise(10.0)
+    # 2. 🚨 [핵심] 강력한 보안 위협 탐지 룰셋 적용
+    df = df.withColumn("risk_score",
+        when(col("action") == "Reverse_Shell_C2", lit(99.0))
+        .when(col("action") == "Massive_FTP_Exfiltration", lit(95.0))
+        .when(col("action") == "Unauthorized_DB_Dump", lit(90.0))
+        .when(col("action") == "SSH_BruteForce", lit(85.0))
+        .otherwise(col("risk_score"))
     )
 
-    df = df.withColumn("alert_message", 
-        when(col("user_id").startswith("GH_"), "Critical: 비인가 계정(Ghost) 생성 탐지") 
-        .when(col("action") == "sudo_exec", "Critical: 관리자 권한(Root) 상승 시도")
-        .when(is_off_hours & is_sensitive_action, "Warning: 비업무 시간(휴일/심야) 대량 데이터 접근")
-        .when(col("action") == "login_fail", "Warning: 반복적인 로그인 실패 감지")
-        .otherwise("Info: 정상 업무 활동")
+    df = df.withColumn("alert_message",
+        when(col("action") == "Reverse_Shell_C2", lit("🚨 CRITICAL: 랜섬웨어/C2 서버 비인가 통신 감지!"))
+        .when(col("action") == "Massive_FTP_Exfiltration", lit("🚨 HIGH: 내부자 대규모 기밀 유출 시도 (FTP)"))
+        .when(col("action") == "Unauthorized_DB_Dump", lit("🚨 HIGH: 비인가 DB 덤프 및 데이터 추출 시도"))
+        .when(col("action") == "SSH_BruteForce", lit("⚠️ WARN: 무차별 대입 공격 (SSH Brute Force) 도배"))
+        .otherwise(col("alert_message"))
     )
+
     return df
