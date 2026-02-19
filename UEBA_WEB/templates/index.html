@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>UEBA Ingestion Monitor</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+    <style>
+        body { background-color: #f8f9fa; }
+        .status-success { color: #198754; font-weight: bold; }
+        .status-fail { color: #dc3545; font-weight: bold; }
+    </style>
+</head>
+<body>
+<div class="container mt-5">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2>🚀 UEBA 데이터 수집 및 적재 현황</h2>
+        <button class="btn btn-primary" onclick="location.reload()">새로고침</button>
+    </div>
+    
+    <div class="card shadow">
+        <div class="card-body">
+            <table class="table table-hover">
+                <thead class="table-dark">
+                    <tr>
+                        <th>ID</th>
+                        <th>수집 시간</th>
+                        <th>수집원 (Source)</th>
+                        <th>대상 인덱스</th>
+                        <th>처리 건수</th>
+                        <th>상태</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in history %}
+                    <tr>
+                        <td>{{ row.id }}</td>
+                        <td>{{ row.collect_time }}</td>
+                        <td><span class="badge bg-info text-dark">{{ row.source_name }}</span></td>
+                        <td><code>{{ row.target_index }}</code></td>
+                        <td><strong>{{ "{:,}".format(row.count) }}</strong> 건</td>
+                        <td>
+                            {% if row.status == 'SUCCESS' %}
+                            <span class="status-success">✅ 성공</span>
+                            {% else %}
+                            <span class="status-fail">❌ 실패</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+</body>
+</html>

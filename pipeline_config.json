@@ -4,8 +4,7 @@
       "plugins.detection.rule_based"
     ],
     "loading": [
-      "plugins.loading.elastic",
-      "plugins.loading.rdb_loader"
+      "plugins.loading.elastic"
     ],
     "notification": []
   }

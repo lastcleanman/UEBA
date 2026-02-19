@@ -1,85 +1,104 @@
-services:
-  # 1. Spark 및 파이프라인 실행 컨테이너 (공식 이미지로 교체)
-  ueba-spark:
-    container_name: ueba-spark
-    image: apache/spark:3.5.0
-    user: root
-    volumes:
-      - .:/UEBA
-      - /etc/localtime:/etc/localtime:ro
-    environment:
-      - TZ=Asia/Seoul
-      - PYTHONPATH=/UEBA             # [핵심] 모듈 인식 에러 방지
-      - TARGET_ES_HOST=ueba-elasticsearch
-      - TARGET_ES_PORT=9200
-      - CONFIG_DIR=/UEBA/common/setup # [핵심] 설정파일 폴더 경로
-    networks:
-      - ueba-net
-    command: tail -f /dev/null
+version: '3.8'
 
-  # 2. Elasticsearch (데이터 저장소)
-  ueba-elasticsearch:
+services:
+  # 1. IAM 및 자산 정보 저장용 (PostgreSQL)
+  postgres:
+    image: postgres:15
+    container_name: ueba-postgres
+    environment:
+      - POSTGRES_USER=admin          # 개별 로컬이라 별도의 ID 생성도 가능하지만 통일성을 위해 admin 으로 지정
+      - POSTGRES_PASSWORD=Suju!0901  # 기본 패스워드는 Suju!0901 로 통일
+      - POSTGRES_DB=ueba_db
+    ports:
+      - "5433:5432"                  # 일반적으로 PostgreSQL의 Port 는 5432를 사용하지만 중복 포트 충돌 방지를 위해 외부포트를 5433으로 변경
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    networks:
+      - ueba-network                 # Docker 재 실행시 내부 IP 변경에도 대응할 수 있도록 같은 Network 대역으로 묶어서 활용
+
+  # 2. 대용량 로그 검색 및 분석용 (Elasticsearch)
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.10.2
     container_name: ueba-elasticsearch
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.2
     environment:
       - discovery.type=single-node
-      - xpack.security.enabled=false
-      - "ES_JAVA_OPTS=-Xms1g -Xmx1g" 
-      - TZ=Asia/Seoul
+      - xpack.security.enabled=false      # 로컬 개발 편의성을 위해 SSL / 인증 보안 해제 ( HTTP 통신 )
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"  # 초기 개발용 메모리 제한
     ports:
       - "9200:9200"
     volumes:
       - ./data/elasticsearch:/usr/share/elasticsearch/data
     networks:
-      - ueba-net
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      - ueba-network
+  # 3. 분산 데이터 처리 엔진 (PySpark)
+  spark:
+    image: apache/spark:3.4.1
+    container_name: ueba-spark
+    user: root  # [추가] pip 설치 시 권한 에러(Permission denied) 방지용
+    environment:
+      - SPARK_MODE=master
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+      - TZ=Asia/Seoul
+      - CONFIG_DIR=/UEBA/common/setup
+    # 컨테이너 실행 시 Spark Master를 명시적으로 실행하여 프로세스 종료 방지
+    command: >
+      bash -c "pip install pyspark pandas sqlalchemy pymysql elasticsearch && /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master && tail -f /dev/null"
+    ports:
+      - "8080:8080" # Spark Master Web UI ( 사람이 웹 브라우저 상태로 확인하는 용도 )
+      - "7077:7077" # Spark Master RPC Port ( 프로그램 / 코드가 데이터 처리를 요청하는 용도 )
+      - "5000:5000" # log 확인용 WEB(5000)
+    volumes:
+      - ./apps:/opt/spark/apps  # 로컬에서 작성한 분석 코드 ( .py) 연동
+      - ./data:/opt/spark/data  # 분석에 필요한 데이터 파일 저장소
+      - .:/UEBA
+      - ./data/remote_logs:/UEBA/data/remote_logs
+      - ./UEBA_WEB:/UEBA_WEB
+    networks:
+      - ueba-network
 
-  # 3. Kibana (시각화)
-  ueba-kibana:
+  # 4. Backend API (FastAPI)
+  backend:
+    image: python:3.10-slim
+    container_name: ueba-backend
+    working_dir: /app
+    command: tail -f /dev/null # 컨테이너 유지용 (내부에서 FastAPI 실행 예정)
+    volumes:
+      - ./backend:/app
+    ports:
+      - "8000:8000"
+    networks:
+      - ueba-network
+
+  # 5. Frontend (Vue.js)
+  frontend:
+    image: node:18-alpine
+    container_name: ueba-frontend
+    working_dir: /app
+    command: tail -f /dev/null # 컨테이너 유지용 (내부에서 npm run dev 실행 예정)
+    volumes:
+      - ./frontend:/app
+    ports:
+      - "5173:5173"
+    networks:
+      - ueba-network
+
+  # 6. Elasticsearch 관리 및 시각화 도구 ( KIBANA )
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.10.2
     container_name: ueba-kibana
-    image: docker.elastic.co/kibana/kibana:8.12.2
     environment:
       - ELASTICSEARCH_HOSTS=http://ueba-elasticsearch:9200
-      - I18N_LOCALE=ko-KR
     ports:
-      - "5601:5601"
+      - "5601:5601" # 웹 브라우저에서 http://localhost:5601 로 접속
     networks:
-      - ueba-net
+      - ueba-network
     depends_on:
-      ueba-elasticsearch:
-        condition: service_healthy
-
-  # 4. MariaDB (인사/HR 데이터베이스)
-  ueba-mariadb:
-    container_name: ueba-mariadb
-    image: mariadb:10.6
-    environment:
-      - MYSQL_ROOT_PASSWORD=Suju!0901
-      - MYSQL_DATABASE=UEBA_TEST
-      - MYSQL_USER=ueba_user
-      - MYSQL_PASSWORD=Suju!0901
-    ports:
-      - "13306:3306"
-    networks:
-      - ueba-net
-
-  # 5. Postgres (기존 수집 대상)
-  ueba-postgres:
-    container_name: ueba-postgres
-    image: postgres:15
-    environment:
-      - POSTGRES_USER=admin
-      - POSTGRES_PASSWORD=Suju!0901
-      - POSTGRES_DB=ueba_db
-    ports:
-      - "5433:5432"
-    networks:
-      - ueba-net
-
+      - elasticsearch
+      
+# 서비스 간 컨테이너 이름으로 통신하기 위한 전용 네트워크 설정
 networks:
-  ueba-net:
+  ueba-network:
     driver: bridge

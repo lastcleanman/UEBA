@@ -9,9 +9,7 @@ LOG_DIR = "/UEBA/data/logs"
 os.makedirs(LOG_DIR, exist_ok=True)
 
 # =====================================================================
-# 💡 [로그 포맷 템플릿 설정]
-# 나중에 포맷을 바꾸고 싶다면 아래 문자열의 모양만 마음대로 수정하시면 됩니다!
-# 중괄호 {} 안의 값은 코드가 실행될 때 자동으로 실제 데이터로 치환됩니다.
+# 💡 [로그 포맷 템플릿]
 # =====================================================================
 FW_LOG_TEMPLATE = (
     "[{action}] [{src_ip}] start_time=\"{timestamp}\" end_time=\"{end_time}\" duration=\"{duration}\" "
@@ -20,9 +18,14 @@ FW_LOG_TEMPLATE = (
     "app_name={app_name} packets_total={packets} bytes_total={bytes}"
 )
 
+# 대시보드에 예쁘게 나올 주요 부서 목록 (가상 데이터 생성 시 사용)
+TARGET_DEPTS = ["플랫폼개발팀", "클라우드보안팀", "인사총무팀", "재무회계팀", "국내영업1팀", "전략기획팀"]
 
 def fetch_real_users():
-    """MariaDB의 sj_ueba_hr 테이블에서 실제 사번, 부서명, 할당 IP를 가져옵니다."""
+    """
+    MariaDB에서 '부서 정보가 확실한' 사용자만 선별하여 가져옵니다.
+    Unknown이나 NULL 부서를 가진 사용자는 로그 생성 대상에서 제외하여 'Other'를 줄입니다.
+    """
     try:
         config_path = "/UEBA/common/setup/db_sources.json"
         with open(config_path, "r", encoding="utf-8") as f:
@@ -35,38 +38,55 @@ def fetch_real_users():
         url = f"mysql+pymysql://{maria_conf['user']}:{maria_conf['password']}@{maria_conf['host']}:{maria_conf['port']}/{maria_conf['db_name']}"
         engine = create_engine(url)
         
-        query = "SELECT emp_id AS user_id, dept_name AS department, static_ip AS src_ip FROM sj_ueba_hr WHERE emp_id IS NOT NULL"
+        # [핵심 수정] 부서가 없거나 Unknown인 사람은 아예 SQL 단계에서 제외합니다.
+        query = """
+            SELECT emp_id AS user_id, dept_name AS department, static_ip AS src_ip 
+            FROM sj_ueba_hr 
+            WHERE emp_id IS NOT NULL 
+              AND dept_name IS NOT NULL 
+              AND dept_name != 'Unknown_Dept' 
+              AND dept_name != ''
+        """
         df = pd.read_sql(query, engine)
 
-        valid_users = []
-        for _, row in df.iterrows():
-            uid = row['user_id']
-            dept = row['department'] if pd.notna(row['department']) else 'Unknown_Dept'
-            ip = row['src_ip'] if pd.notna(row['src_ip']) and str(row['src_ip']).strip() != "" else f"192.168.1.{random.randint(2, 254)}"
+        if df.empty:
+            print("⚠️ 주의: DB에 부서 정보가 있는 사용자가 없습니다. 가상 데이터를 생성합니다.")
+            raise Exception("No valid users found")
+
+        valid_users = df.to_dict('records')
             
-            valid_users.append({"user_id": str(uid), "department": str(dept), "src_ip": str(ip)})
-            
-        print(f"✅ MariaDB 연동 성공: 총 {len(valid_users)}명의 실제 직원 정보를 불러왔습니다.")
+        print(f"✅ MariaDB 연동 성공: 부서가 확인된 {len(valid_users)}명의 직원을 대상으로 로그를 생성합니다.")
         return valid_users
+
     except Exception as e:
-        print(f"❌ DB 연동 실패: {e} (기본 가상 데이터로 진행합니다.)")
-        return [{"user_id": f"user{i:03d}", "department": "Sales", "src_ip": f"192.168.1.{i+10}"} for i in range(1, 11)]
+        print(f"❌ DB 연동 실패 또는 데이터 부족: {e}")
+        print("💡 대시보드용 가상 '우수 부서' 데이터를 강제로 생성합니다.")
+        
+        # DB 연결이 안 될 경우, 'Other'가 뜨지 않도록 우리가 정의한 예쁜 부서명으로 가상 유저를 만듭니다.
+        fake_users = []
+        for i in range(50):
+            fake_users.append({
+                "user_id": f"EMP{i:03d}",
+                "department": random.choice(TARGET_DEPTS), # 여기서 확실한 부서를 지정
+                "src_ip": f"192.168.10.{i+10}"
+            })
+        return fake_users
 
 
 def generate_custom_format_logs(valid_users):
-    """요청하신 Key-Value 포맷 템플릿을 사용하여 방화벽 스타일 로그를 대량 생성합니다."""
     log_lines = []
     now = datetime.now()
     
-    # 1. [정상] 모든 직원이 무작위로 1~10번씩 방화벽 로그를 발생시킴 (대용량)
+    # 1. [정상] 데이터 풍부화: 'Other' 비율을 낮추기 위해 정상 부서 로그를 대량(인당 30~50건) 생성
+    print("⏳ 정상 업무 로그 대량 생성 중...")
     for user in valid_users:
-        # 각 직원당 1건 ~ 10건의 정상 로그를 무작위로 생성
-        for _ in range(random.randint(1, 10)):
-            ts = now - timedelta(hours=random.randint(1, 72)) # 최근 3일 치 데이터
+        # 데이터가 너무 적으면 Other가 커 보일 수 있으므로 생성량을 늘림 (1~10 -> 20~40)
+        for _ in range(random.randint(20, 40)): 
+            ts = now - timedelta(hours=random.randint(1, 168)) # 최근 7일치
             duration = random.randint(1, 120)
             
             log_data = {
-                "action": random.choice(["fw4_allow", "fw4_allow", "fw6_allow"]),
+                "action": random.choices(["fw4_allow", "fw4_deny"], weights=[0.9, 0.1])[0],
                 "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
                 "end_time": (ts + timedelta(seconds=duration)).strftime("%Y-%m-%d %H:%M:%S"),
                 "duration": duration,
@@ -78,62 +98,60 @@ def generate_custom_format_logs(valid_users):
                 "dst_ip": f"10.10.10.{random.randint(1, 50)}",
                 "dst_port": random.choice([80, 443, 8080]),
                 "protocol": "TCP",
-                "app_name": random.choice(["Web-Browsing", "Office365", "Slack"]),
+                "app_name": random.choice(["Suju_Groupware", "ERP_System", "Jira", "Slack"]),
                 "packets": random.randint(10, 500),
                 "bytes": random.randint(1024, 50000)
             }
             log_lines.append(FW_LOG_TEMPLATE.format(**log_data))
 
     # =================================================================
-    # 🚨 [위협 강화] SOC 시연용 4대 치명적 해킹 시나리오 강제 주입
+    # 🚨 [위협] SOC 탐지 시나리오 (타겟 유저도 반드시 부서가 있는 사람으로 선정)
     # =================================================================
-    target_users = random.sample(valid_users, min(5, len(valid_users))) # 타겟 5명 선정
+    if len(valid_users) >= 5:
+        target_users = random.sample(valid_users, 5)
+    else:
+        target_users = valid_users
+
     weekend_time = now - timedelta(days=now.weekday() + 1)
     
     for i, target_user in enumerate(target_users):
-        night_time = weekend_time.replace(hour=random.randint(1, 4), minute=random.randint(0, 59), second=0)
+        night_time = weekend_time.replace(hour=random.randint(1, 4), minute=random.randint(0, 59))
         
-        # 1. 랜섬웨어/C2 서버 비인가 통신 (Reverse Shell)
+        # 1. C2 통신 (Reverse Shell)
         if i == 0:
-            for j in range(3):
+            for j in range(5): # 탐지 잘 되게 횟수 증가
                 ts = night_time + timedelta(minutes=j*2)
-                log_data = {"action": "fw6_drop", "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"), "end_time": (ts + timedelta(seconds=5)).strftime("%Y-%m-%d %H:%M:%S"), "duration": 5, "machine_name": "FW-Core-01", "fw_rule_id": "Rule_Block_C2", "src_ip": target_user["src_ip"], "user_id": target_user["user_id"], "src_port": 4444, "dst_ip": "185.10.10.2", "dst_port": 4444, "protocol": "TCP", "app_name": "Reverse_Shell_C2", "packets": 500, "bytes": 15000}
+                log_data = {"action": "fw6_drop", "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"), "end_time": (ts+timedelta(seconds=5)).strftime("%Y-%m-%d %H:%M:%S"), "duration": 5, "machine_name": "FW-Core-01", "fw_rule_id": "Rule_Block_C2", "src_ip": target_user["src_ip"], "user_id": target_user["user_id"], "src_port": 4444, "dst_ip": "185.10.10.2", "dst_port": 4444, "protocol": "TCP", "app_name": "Reverse_Shell_C2", "packets": 500, "bytes": 15000}
                 log_lines.append(FW_LOG_TEMPLATE.format(**log_data))
 
-        # 2. 내부자 대규모 기밀 유출 (FTP/클라우드 대용량 전송)
+        # 2. 대량 데이터 유출
         elif i == 1:
             ts = night_time + timedelta(minutes=15)
-            log_data = {"action": "fw4_allow", "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"), "end_time": (ts + timedelta(seconds=1800)).strftime("%Y-%m-%d %H:%M:%S"), "duration": 1800, "machine_name": "FW-Core-01", "fw_rule_id": "Rule_Bypass", "src_ip": target_user["src_ip"], "user_id": target_user["user_id"], "src_port": 55112, "dst_ip": "104.20.15.10", "dst_port": 21, "protocol": "TCP", "app_name": "Massive_FTP_Exfiltration", "packets": 999999, "bytes": 8500000000}
+            log_data = {"action": "fw4_allow", "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"), "end_time": (ts+timedelta(seconds=1800)).strftime("%Y-%m-%d %H:%M:%S"), "duration": 1800, "machine_name": "FW-Core-01", "fw_rule_id": "Rule_Bypass", "src_ip": target_user["src_ip"], "user_id": target_user["user_id"], "src_port": 55112, "dst_ip": "104.20.15.10", "dst_port": 21, "protocol": "TCP", "app_name": "Massive_FTP_Exfiltration", "packets": 999999, "bytes": 8500000000}
             log_lines.append(FW_LOG_TEMPLATE.format(**log_data))
 
-        # 3. 무차별 대입 공격 (SSH Brute Force)
+        # 3. SSH Brute Force
         elif i == 2:
-            for j in range(50): # 50번 연속 실패 (로그 도배)
+            for j in range(50):
                 ts = night_time + timedelta(seconds=j*2)
-                log_data = {"action": "fw4_drop", "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"), "end_time": (ts + timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S"), "duration": 1, "machine_name": "FW-Core-01", "fw_rule_id": "Rule_SSH", "src_ip": target_user["src_ip"], "user_id": target_user["user_id"], "src_port": random.randint(30000, 60000), "dst_ip": "192.168.10.5", "dst_port": 22, "protocol": "TCP", "app_name": "SSH_BruteForce", "packets": 10, "bytes": 512}
+                log_data = {"action": "fw4_drop", "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"), "end_time": (ts+timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S"), "duration": 1, "machine_name": "FW-Core-01", "fw_rule_id": "Rule_SSH", "src_ip": target_user["src_ip"], "user_id": target_user["user_id"], "src_port": random.randint(30000, 60000), "dst_ip": "192.168.10.5", "dst_port": 22, "protocol": "TCP", "app_name": "SSH_BruteForce", "packets": 10, "bytes": 512}
                 log_lines.append(FW_LOG_TEMPLATE.format(**log_data))
 
-        # 4. DB 덤프 및 권한 상승 시도
-        else:
-            ts = night_time + timedelta(minutes=30)
-            log_data = {"action": "fw4_allow", "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"), "end_time": (ts + timedelta(seconds=600)).strftime("%Y-%m-%d %H:%M:%S"), "duration": 600, "machine_name": "FW-Core-01", "fw_rule_id": "Rule_DB_Dump", "src_ip": target_user["src_ip"], "user_id": target_user["user_id"], "src_port": random.randint(40000, 50000), "dst_ip": "192.168.100.10", "dst_port": 1521, "protocol": "TCP", "app_name": "Unauthorized_DB_Dump", "packets": 50000, "bytes": 2000000000}
-            log_lines.append(FW_LOG_TEMPLATE.format(**log_data))
-
-    # 파일 저장 부분
+    # 파일 저장
     file_path = os.path.join(LOG_DIR, "firewall_traffic.log")
     with open(file_path, "w", encoding="utf-8") as f:
         for line in log_lines:
             f.write(line + "\n")
             
     print(f"✅ [생성 완료] 방화벽 트래픽 로그: {file_path} ({len(log_lines):,}건)")
+    print(f"ℹ️  이제 'Other' 비율이 줄어들고 {', '.join(TARGET_DEPTS)} 등 주요 부서 위주로 표시될 것입니다.")
 
 
 if __name__ == "__main__":
-    print("====== 가상 보안 위협 로그 생성을 시작합니다 ======")
+    print("====== [개선된] 가상 보안 위협 로그 생성 ======")
     valid_users_list = fetch_real_users()
     
     if valid_users_list:
-        # 방화벽 포맷 로그 생성 실행
         generate_custom_format_logs(valid_users_list)
-        
-    print("====== 가상 로그 생성 완료 ======")
+    
+    print("====== 생성 완료 ======")

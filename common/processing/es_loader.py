@@ -3,17 +3,17 @@ from elasticsearch.helpers import bulk
 from common.setup.logger import get_logger
 
 logger = get_logger("ESLoader")
-
 class ESLoader:
     def __init__(self, host='localhost', port=9200):
-        # [수정] 호환성(Compatibility) 모드를 명시적으로 활성화합니다.
+        # 복잡한 옵션 없이 가장 기본적으로 연결
         self.es = Elasticsearch(
             f"http://{host}:{port}",
             request_timeout=60,
-            max_retries=3,
-            retry_on_timeout=True,
-            # 💡 버전 9 클라이언트가 버전 8 서버와 통신할 때 발생하는 헤더 에러 방지
-            meta_header=False
+            # 아래의 headers 설정을 반드시 추가해야 합니다 (버전 8 서버 호환용)
+            headers={
+                "Accept": "application/vnd.elasticsearch+json; compatible-with=8",
+                "Content-Type": "application/vnd.elasticsearch+json; compatible-with=8"
+            }
         )
 
     def load(self, df, index_name, id_cols=None):

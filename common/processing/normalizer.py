@@ -8,7 +8,7 @@ def normalize_data(spark, raw_pandas_df, source_name):
         raw_pandas_df = raw_pandas_df.astype(str).replace({'nan': '', 'None': '', 'NaT': ''})
     except: pass
 
-    df = spark.createDataFrame(raw_pandas_df)
+    df = raw_pandas_df
     
     required_cols = ["user_id", "employee_id", "name", "name_kr", "action", "log_source", "src_ip", "department"]
     for c in required_cols:

@@ -7,7 +7,8 @@
     "user": "admin",
     "password": "Suju!0901",
     "db_name": "ueba_db",
-    "query": "SELECT * FROM employees"
+    "query": "SELECT * FROM employees",
+    "enabled": true
   },
   {
     "name": "ueba_mariaDB",
@@ -17,6 +18,7 @@
     "user": "ueba_user",
     "password": "Suju!0901",
     "db_name": "UEBA_TEST",
-    "query": "SELECT * FROM sj_ueba_hr"
+    "query": "SELECT * FROM sj_ueba_hr",
+    "enabled": true
   }
 ]

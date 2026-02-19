@@ -1,9 +1,34 @@
 [
   {
-    "name": "Firewall_Traffic_Logs",
+    "name": "Auth_Logs",
     "type": "file",
-    "path": "/UEBA/data/logs/firewall_traffic.log",
-    "pattern": ".*?end_time=\"(?P<final_ts>.*?)\" duration=\"(?P<duration>.*?)\" .*?src_ip=(?P<src_ip>.*?) user_id=(?P<user_id>.*?) src_port=(?P<src_port>\\d+) dst_ip=(?P<dst_ip>.*?) dst_port=(?P<dst_port>\\d+) protocol=(?P<protocol>.*?) app_name=(?P<action>.*?) packets_total=(?P<packets_total>\\d+) bytes_total=(?P<bytes_total>\\d+)",
+    "path": "/UEBA/data/logs/authentication_activity.log",
+    "format": "regex",
+    "pattern": "^(?P<timestamp>\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}) \\| (?P<user_id>\\S+) \\| (?P<action>\\S+) \\| (?P<src_ip>\\S+) \\| (?P<method>\\S+)",
+    "enabled": true
+  },
+  {
+    "name": "Web_Logs",
+    "type": "file",
+    "path": "/UEBA/data/logs/webserver_activity.log",
+    "format": "regex",
+    "pattern": "^(?P<timestamp>\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}) \\| (?P<src_ip>\\S+) \\| (?P<request>[^|]+) \\| (?P<status>\\d+) \\| (?P<user_agent>.*)",
+    "enabled": true
+  },
+  {
+    "name": "Firewall_Logs",
+    "type": "file",
+    "path": "/UEBA/data/logs/firewall_activity.log",
+    "format": "regex",
+    "pattern": "^\\[(?P<action>\\S+)\\] src=(?P<src_ip>\\S+) dst=(?P<dst_ip>\\S+) dst_port=(?P<dst_port>\\d+) proto=TCP service=(?P<app_name>\\S+) bytes=(?P<bytes>\\d+)",
+    "enabled": true
+  },
+  {
+    "name": "Endpoint_Logs",
+    "type": "file",
+    "path": "/UEBA/data/logs/endpoint_activity.log",
+    "format": "regex",
+    "pattern": "^(?P<timestamp>\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}) \\| (?P<machine_name>\\S+) \\| (?P<user_id>\\S+) \\| (?P<action>\\S+) \\| (?P<process_name>\\S+) \\| (?P<pid>\\d+)",
     "enabled": true
   }
 ]
