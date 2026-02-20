@@ -26,22 +26,18 @@ logger = get_logger("Orchestrator")
 
 WATERMARK_FILE = "/UEBA/watermark.json"
 PARSER_DIR = "/UEBA/common/parser"
-DB_SOURCES_PATH = "/UEBA/common/setup/db_sources.json" # ⭐️ DB 설정 파일 경로
+DB_SOURCES_PATH = "/UEBA/common/setup/db_sources.json"
 
-# --- [추가] DB 설정을 JSON에서 읽어 Engine을 생성하는 함수 ---
-
+# --- [DB 설정 및 엔진 생성] ---
 def get_db_engine_by_name(db_name="ueba_mariaDB"):
-    """json 설정 파일에서 이름으로 DB 접속 정보를 찾아 SQLAlchemy Engine을 반환합니다."""
     try:
         if not os.path.exists(DB_SOURCES_PATH):
             logger.error(f"❌ DB 설정 파일을 찾을 수 없습니다: {DB_SOURCES_PATH}")
             return None
             
         with open(DB_SOURCES_PATH, "r", encoding="utf-8") as f:
-            # ⭐️ 함수 안에서 직접 읽어서 'sources' 미정의 에러 방지
             data_sources = json.load(f)
             
-        # 리스트 형태인 경우와 단일 객체인 경우 모두 대응
         if isinstance(data_sources, list):
             conf = next((s for s in data_sources if s.get("name") == db_name), None)
         else:
@@ -51,13 +47,7 @@ def get_db_engine_by_name(db_name="ueba_mariaDB"):
             logger.error(f"❌ '{db_name}' 설정을 찾을 수 없습니다.")
             return None
             
-        # ⭐️ 제공해주신 JSON의 'database' 키를 정확히 읽어옴
         target_db = conf.get('database')
-        if not target_db:
-            logger.error(f"❌ '{db_name}' 설정에 'database' 필드가 없습니다.")
-            return None
-            
-        # SQLAlchemy URL 생성
         db_url = f"mysql+pymysql://{conf['user']}:{conf['password']}@{conf['host']}:{conf['port']}/{target_db}"
         return create_engine(db_url, pool_pre_ping=True)
         
@@ -65,13 +55,10 @@ def get_db_engine_by_name(db_name="ueba_mariaDB"):
         logger.error(f"❌ DB 엔진 생성 실패: {e}")
         return None
 
-# 전역 엔진 변수 초기화
 db_engine = get_db_engine_by_name("ueba_mariaDB")
 
-# --- [Step 1~3] 자율 학습 및 파서 생성/저장 로직 ---
-
+# --- [Step 1~3] 자율 학습 및 파서 저장 ---
 def auto_learn_and_save_parsers():
-    """로그 패턴 학습 후 DB와 물리 파일에 동시 저장 (DB 엔진 동적 활용)"""
     if db_engine is None: return
     
     logger.info("🕵️ [Step 1-3] 신규 패턴 학습 및 파서 업데이트 시작")
@@ -114,11 +101,9 @@ def auto_learn_and_save_parsers():
 
             xml_str = minidom.parseString(ET.tostring(root)).toprettyxml(indent="    ")
 
-            # 파일 저장
             with open(os.path.join(PARSER_DIR, f"{source_name}.xml"), "w", encoding="utf-8") as xf:
                 xf.write(xml_str)
             
-            # DB 저장
             with db_engine.begin() as conn:
                 conn.execute(text("""
                     INSERT INTO sj_ueba_parsers (source_name, parser_xml)
@@ -129,8 +114,7 @@ def auto_learn_and_save_parsers():
         except Exception as e:
             logger.error(f"❌ [{source_name}] 학습 실패: {e}")
 
-# --- [Step 4] 수집 이력 관리 로직 ---
-
+# --- [Step 4] 수집 이력 저장 함수 ---
 def save_history(source, count, status, error="", start_time=None):
     if db_engine is None: return
     try:
@@ -141,12 +125,11 @@ def save_history(source, count, status, error="", start_time=None):
             """), {
                 "source": source, "count": count, "status": status, "error": error, "start": start_time
             })
-        logger.info(f"📜 [History] {source} 처리 이력 기록 완료")
+        logger.info(f"📜 [History] {source} 처리 이력 기록 완료 (건수: {count})")
     except Exception as e:
         logger.warning(f"⚠️ DB 이력 저장 실패: {e}")
 
-# --- 기존 파이프라인 로직 (수정 및 유지) ---
-
+# --- [유틸리티 함수] ---
 def get_last_ts(source_name):
     try:
         if os.path.exists(WATERMARK_FILE):
@@ -177,7 +160,7 @@ def reset_and_init_es():
         "final_ts": { "type": "date", "format": "yyyy-MM-dd+HH:mm||yyyy-MM-dd||yyyy-MM-dd'T'HH:mm:ss||yyyy-MM-dd HH:mm:ss||strict_date_optional_time||epoch_millis" },
         "log_source": { "type": "keyword" }, "user_id": { "type": "keyword" },
         "action": { "type": "keyword" }, "risk_score": { "type": "double" },
-        "emp_name": { "type": "keyword" }  # ⭐️ 이름 필드 추가
+        "emp_name": { "type": "keyword" }
     }}}
     try:
         req = urllib.request.Request(es_url, data=json.dumps(mapping).encode("utf-8"), method="PUT")
@@ -186,8 +169,8 @@ def reset_and_init_es():
         logger.info(f"✅ ES 매핑 초기화 완료")
     except Exception as e: logger.error(f"❌ ES 초기화 실패: {e}")
 
+# --- [핵심 파이프라인 엔진] ---
 def run_pipeline(spark, active_plugins):
-    # 매 주기 시작 시 학습 먼저 수행 (Step 1-3)
     auto_learn_and_save_parsers()
 
     sources = []
@@ -201,35 +184,76 @@ def run_pipeline(spark, active_plugins):
         start_time = datetime.now()
         source_name = source.get('name', 'Unknown')
         
+        # ⭐️ [복구됨] 소스별 워터마크 설정값 가져오기
+        watermark_col = source.get("watermark_col", "final_ts")
+        watermark_default = source.get("watermark_default", "1970-01-01 00:00:00")
+        source_type = source.get("type", "").lower()
+        
         try:
-            # 데이터 수집 (DB에서 실시간 생성된 파서 참조)
-            raw_pandas_df = fetch_data(source)
-            if raw_pandas_df is None or raw_pandas_df.empty: continue
+            last_ts = get_last_ts(source_name)
             
+            # ⭐️ [복구됨] 파일에 저장된 이력이 없고 특별한 기본값(예: "0")이 있다면 교체
+            if last_ts == "1970-01-01 00:00:00" and watermark_default != "1970-01-01 00:00:00":
+                last_ts = watermark_default
+                
+            # 1. 데이터 가져오기 (DB/파일 소스 공통)
+            raw_pandas_df = fetch_data(source, last_updated=last_ts)
+            
+            # [궁극의 방어선] None이거나, 유령 컬럼만 있는 경우 완벽 차단
+            if raw_pandas_df is None or raw_pandas_df.empty or len(raw_pandas_df.index) == 0:
+                logger.info(f"⏩ [{source_name}] 신규 수집 데이터가 없습니다. (0건 기록)")
+                save_history(source_name, 0, "SUCCESS", start_time=start_time)
+                continue
+
+            raw_pandas_df = raw_pandas_df.dropna(axis=1, how='all')
+            if raw_pandas_df.empty:
+                logger.info(f"⏩ [{source_name}] 유효한 값(알맹이)이 있는 데이터가 없습니다. (0건 기록)")
+                save_history(source_name, 0, "SUCCESS", start_time=start_time)
+                continue
+                
+            # ⭐️ [핵심 복구] Spark로 변환하기 전, 원본 DB 데이터에서 기준 컬럼(emp_id 등)의 최댓값을 미리 추출!
+            new_max_ts = None
+            if watermark_col in raw_pandas_df.columns:
+                new_max_ts = str(raw_pandas_df[watermark_col].max())
+
+            # 2. Pandas DataFrame을 딕셔너리 리스트로 변환
             safe_pandas_df = raw_pandas_df.replace({pd.NA: None}).where(pd.notnull(raw_pandas_df), None)
             dict_list = safe_pandas_df.to_dict(orient='records')
-            spark_df = spark.createDataFrame(dict_list)
+            
+            if not dict_list or len(dict_list) == 0:
+                logger.info(f"⏩ [{source_name}] Spark에 넘길 유효 데이터 행이 없습니다. (0건 기록)")
+                save_history(source_name, 0, "SUCCESS", start_time=start_time)
+                continue
 
-            # 정제 및 맵핑 (Step 4)
+            # 3. 안전이 확보된 데이터만 Spark DataFrame으로 생성
+            spark_df = spark.createDataFrame(dict_list)
             clean_df = normalize_data(spark, spark_df, source_name)
             
-            last_ts = get_last_ts(source_name)
-            clean_df = clean_df.filter(col("final_ts").cast("string") > lit(str(last_ts)))
+            # ⭐️ [복구됨] DB 소스는 쿼리에서 필터링했으므로, 파일 소스일 때만 Spark 메모리 2차 필터링
+            if source_type == "file":
+                clean_df = clean_df.filter(col("final_ts").cast("string") > lit(str(last_ts)))
+                
             current_count = clean_df.count()
             
             if current_count == 0:
-                logger.info(f"⏩ [{source_name}] 새 데이터가 없습니다.")
+                logger.info(f"⏩ [{source_name}] 워터마크 이후 신규 데이터가 없습니다. (0건 기록)")
+                save_history(source_name, 0, "SUCCESS", start_time=start_time)
                 continue
                 
-            # Watermark 갱신
-            max_ts = clean_df.agg({"final_ts": "max"}).collect()[0][0]
-            if max_ts: set_last_ts(source_name, max_ts)
+            # 4. 수집 성공 시 Watermark 갱신 (원본 DB에서 구한 emp_id 등의 최댓값을 최우선 사용)
+            if new_max_ts:
+                set_last_ts(source_name, new_max_ts)
+                logger.info(f"📍 [{source_name}] Watermark 갱신 완료 ({watermark_col}): {new_max_ts}")
+            else:
+                max_ts = clean_df.agg({"final_ts": "max"}).collect()[0][0]
+                if max_ts: 
+                    set_last_ts(source_name, str(max_ts))
+                    logger.info(f"📍 [{source_name}] Watermark 갱신 완료: {max_ts}")
 
-            # 플러그인 실행 (Elastic 적재 등)
+            # 5. 플러그인 실행 및 적재
             detected_df = load_and_run_plugins(clean_df, active_plugins.get("detection", []), "Detection")
             load_and_run_plugins(detected_df, active_plugins.get("loading", []), "Loading")
             
-            # 처리 완료 이력 저장 (Step 4)
             save_history(source_name, current_count, "SUCCESS", start_time=start_time)
             total_processed += current_count
 

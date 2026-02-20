@@ -1,0 +1,9 @@
+<?xml version="1.0" ?>
+<parser name="Endpoint_Logs">
+    <field target="user_id" source="user_id"/>
+    <field target="user_id" source="user"/>
+    <field target="department" source="department"/>
+    <field target="action" source="action"/>
+    <field target="device_id" source="device_id"/>
+    <field target="emp_name" source="mapped_name"/>
+</parser>

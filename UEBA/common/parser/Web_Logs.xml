@@ -1,0 +1,10 @@
+<?xml version="1.0" ?>
+<parser name="Web_Logs">
+    <field target="user_id" source="user_id"/>
+    <field target="user_id" source="user"/>
+    <field target="department" source="department"/>
+    <field target="action" source="action"/>
+    <field target="resource" source="resource"/>
+    <field target="src_ip" source="ip"/>
+    <field target="emp_name" source="mapped_name"/>
+</parser>

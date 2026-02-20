@@ -55,7 +55,9 @@ services:
       - ./data:/opt/spark/data  # 분석에 필요한 데이터 파일 저장소
       - .:/UEBA
       - ./data/remote_logs:/UEBA/data/remote_logs
-      - ./UEBA_WEB:/UEBA_WEB
+      - /UEBA_WEB:/UEBA_WEB
+      - /UEBA:/UEBA
+      - ./UEBA/common/parser:/UEBA_WEB/templates/parsers
     networks:
       - ueba-network
 

@@ -1,0 +1,9 @@
+<?xml version="1.0" ?>
+<parser name="Firewall_Logs">
+    <field target="user_id" source="user_id"/>
+    <field target="user_id" source="user"/>
+    <field target="department" source="department"/>
+    <field target="src_ip" source="src_ip"/>
+    <field target="action" source="action"/>
+    <field target="emp_name" source="mapped_name"/>
+</parser>

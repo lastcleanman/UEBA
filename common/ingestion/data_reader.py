@@ -56,19 +56,23 @@ def get_source_field(source_name, target_field, base_dir="/UEBA/common/parser/")
         logger.error(f"❌ [{source_name}] XML 파싱 에러: {e}")
     return target_field
 
-def fetch_data(config):
+def fetch_data(config, last_updated="1970-01-01 00:00:00"):
     source_name = config.get("name", "Unknown")
     source_type = config.get("type").lower()
     
     try:
         df = None
         if source_type in ["postgresql", "postgres", "mysql", "mariadb"]:
-            # ⭐️ 개별 DB 수집 시에도 dbname 키 보정 (None 에러 방지 핵심)
             db_conf = config.copy()
             if "database" in db_conf:
                 db_conf["dbname"] = db_conf["database"]
                 
+            # ⭐️ 2. RDBMSConnector에 last_updated 값을 함께 전달하여 쿼리 필터링 요청
+            # (RDBMSConnector 내부에도 이 값을 받는 로직이 필요할 수 있습니다)
+            db_conf["last_updated"] = last_updated
+                
             connector = RDBMSConnector(db_conf)
+            # RDBMSConnector의 fetch 함수가 last_updated를 처리하도록 유도
             df = connector.fetch()
             
         elif source_type == "file":
@@ -82,6 +86,7 @@ def fetch_data(config):
             for file_path in file_list:
                 temp_config = config.copy()
                 temp_config['path'] = file_path
+                # 파일의 경우, 전체를 읽은 뒤 Spark 엔진 단에서 필터링하는 기존 방식 유지
                 connector = FileConnector(temp_config)
                 temp_df = connector.fetch()
                 if temp_df is not None and not temp_df.empty:
@@ -90,18 +95,25 @@ def fetch_data(config):
             if df_list:
                 df = pd.concat(df_list, ignore_index=True)
 
+        # ... (이하 HR 매핑 로직은 기존과 동일하게 유지) ...
         if df is not None and not df.empty:
             hr_lookup = get_hr_lookup()
-            
+
+            if hr_lookup and "user_id" in df.columns:
+                df["emp_name"] = df["user_id"].astype(str).map(hr_lookup)
+                df["emp_name"] = df["emp_name"].fillna("Unknown_User")
+                
             if hr_lookup:
                 src_uid_col = get_source_field(source_name, "user_id")
-                src_user_col = get_source_field(source_name, "emp_name") # 차트용 emp_name 기준
+                src_user_col = get_source_field(source_name, "emp_name")
                 
                 if src_uid_col in df.columns:
                     if src_user_col not in df.columns:
-                        df[src_user_col] = df[src_uid_col].astype(str).map(hr_lookup)
+                        # ⭐️ 수정됨: 매핑 실패 시 100% NaN이 되지 않도록 fillna 추가
+                        df[src_user_col] = df[src_uid_col].astype(str).map(hr_lookup).fillna("Unknown_User")
                     else:
-                        df[src_user_col] = df[src_user_col].fillna(df[src_uid_col].astype(str).map(hr_lookup))
+                        # ⭐️ 수정됨: 기존 컬럼이 있어도 빈 값은 채우도록 보완
+                        df[src_user_col] = df[src_user_col].fillna(df[src_uid_col].astype(str).map(hr_lookup)).fillna("Unknown_User")
                 
         return df
 
