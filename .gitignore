@@ -1,0 +1,14 @@
+# DB & Search Engine Data
+data/elasticsearch/
+data/postgres/
+data/mariadb/
+
+# Logs & Watermarks
+data/logs/*.log
+data/remote_logs/
+watermark.json
+
+# Python & System
+__pycache__/
+*.pyc
+.DS_Store

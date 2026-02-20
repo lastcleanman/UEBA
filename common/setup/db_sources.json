@@ -6,7 +6,7 @@
     "port": 5432,
     "user": "admin",
     "password": "Suju!0901",
-    "db_name": "ueba_db",
+    "database": "ueba_db",
     "query": "SELECT * FROM employees",
     "enabled": true
   },
@@ -17,7 +17,7 @@
     "port": 13306,
     "user": "ueba_user",
     "password": "Suju!0901",
-    "db_name": "UEBA_TEST",
+    "database": "UEBA_TEST",
     "query": "SELECT * FROM sj_ueba_hr",
     "enabled": true
   }

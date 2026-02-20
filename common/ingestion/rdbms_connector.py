@@ -1,45 +1,52 @@
 import pandas as pd
-import traceback
 from sqlalchemy import create_engine, text
-from common.ingestion.base import BaseConnector
 from common.setup.logger import get_logger
 
 logger = get_logger("RDBMSConnector")
 
-class RDBMSConnector(BaseConnector):
+class RDBMSConnector:
     def __init__(self, config):
-        super().__init__(config)
-        self.db_type = self.config.get("type", "postgres").lower()
-        self.host = self.config.get("host")
-        self.port = self.config.get("port")
-        self.user = self.config.get("user")
-        self.password = self.config.get("password")
-        # [통일] pipeline_config.json의 db_name과 일치시킴
-        self.dbname = self.config.get("db_name")
-        self.engine = self._create_engine()
+        self.config = config
+        self.source_name = config.get("name", "Unknown")
+        self.db_type = config.get("type", "").lower()
+        self.host = config.get("host")
+        self.port = config.get("port")
+        self.user = config.get("user")
+        self.password = config.get("password")
+        
+        # ⭐️ 모든 가능한 키워드를 총동원하여 데이터베이스 이름을 완벽하게 찾습니다.
+        self.database = (config.get("database") or 
+                         config.get("dbname") or 
+                         config.get("db_name") or 
+                         config.get("db") or 
+                         config.get("schema"))
+                         
+        self.query = config.get("query")
 
-    def _create_engine(self):
+    def fetch(self):
+        if not self.database:
+            logger.error(f"❌ [{self.source_name}] DB 이름이 설정되지 않았습니다. (설정값: {self.config})")
+            return None
+
         try:
-            if self.db_type in ['postgres', 'postgresql']:
-                url = f"postgresql+psycopg2://{self.user}:{self.password}@{self.host}:{self.port}/{self.dbname}"
-            elif self.db_type in ['mysql', 'mariadb']:
-                url = f"mysql+pymysql://{self.user}:{self.password}@{self.host}:{self.port}/{self.dbname}"
+            # SQLAlchemy 연결 URL 조합
+            if self.db_type in ["postgresql", "postgres"]:
+                url = f"postgresql+psycopg2://{self.user}:{self.password}@{self.host}:{self.port}/{self.database}"
+            elif self.db_type in ["mysql", "mariadb"]:
+                url = f"mysql+pymysql://{self.user}:{self.password}@{self.host}:{self.port}/{self.database}"
             else:
-                raise ValueError(f"지원하지 않는 DB 타입: {self.db_type}")
-            return create_engine(url, connect_args={'connect_timeout': 5})
-        except Exception as e:
-            logger.error(f"❌ DB Engine 생성 실패: {str(e)}")
-            logger.debug(traceback.format_exc())
-            raise e
+                logger.error(f"❌ [{self.source_name}] 지원하지 않는 DB 타입입니다: {self.db_type}")
+                return None
 
-    def fetch(self, query=None):
-        if not query:
-            query = self.config.get("query")
-        try:
-            # SQLAlchemy 2.0 호환성 위해 text() 사용
-            df = pd.read_sql(text(query), self.engine)
+            # DB 연결 및 데이터 추출 (pool_pre_ping으로 끊어진 연결 자동 방어)
+            engine = create_engine(url, pool_pre_ping=True)
+            with engine.connect() as conn:
+                df = pd.read_sql(text(self.query), conn)
+            
+            logger.info(f"✅ [{self.source_name}] DB 데이터 추출 성공 ({len(df)}건)")
             return df
+            
         except Exception as e:
-            logger.error(f"❌ 데이터 추출 실패 ({self.db_type}): {str(e)}")
-            logger.error(f"   - 실행 쿼리: {query}")
-            return pd.DataFrame()
+            logger.error(f"❌ 데이터 추출 실패 ({self.db_type}): {e}")
+            logger.error(f"   - 실행 쿼리: {self.query}")
+            return None

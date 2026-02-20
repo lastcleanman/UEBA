@@ -5,6 +5,7 @@ from common.setup.logger import get_logger
 import json
 import glob
 import os
+import xml.etree.ElementTree as ET
 
 logger = get_logger("Ingestion")
 
@@ -14,15 +15,24 @@ def get_hr_lookup():
         with open("/UEBA/common/setup/db_sources.json", "r", encoding="utf-8") as f:
             sources = json.load(f)
         
-        maria_conf = next((s for s in sources if s["name"] == "ueba_mariaDB"), None)
+        # ⭐️ ueba_mariaDB 설정을 찾음
+        target_conf = next((s for s in sources if s["name"] == "ueba_mariaDB"), None)
+        if not target_conf: return None
+        
+        maria_conf = target_conf.copy()
+        
         if maria_conf and maria_conf.get("enabled"):
+            # ⭐️ RDBMSConnector 호환을 위해 database 키를 dbname으로 복사
+            if "database" in maria_conf:
+                maria_conf["dbname"] = maria_conf["database"]
+            
             connector = RDBMSConnector(maria_conf)
             hr_df = connector.fetch()
             
             if hr_df is not None and not hr_df.empty:
                 hr_df.columns = [c.lower().strip() for c in hr_df.columns]
-                id_col = 'emp_id' if 'emp_id' in hr_df.columns else hr_df.columns[0]
-                name_col = 'emp_name' if 'emp_name' in hr_df.columns else hr_df.columns[1]
+                id_col = 'employee_id' if 'employee_id' in hr_df.columns else ('emp_id' if 'emp_id' in hr_df.columns else hr_df.columns[0])
+                name_col = 'name_kr' if 'name_kr' in hr_df.columns else ('emp_name' if 'emp_name' in hr_df.columns else hr_df.columns[1])
                 
                 lookup = dict(zip(hr_df[id_col].astype(str), hr_df[name_col].astype(str)))
                 logger.info(f"✅ HR 마스터 로드 성공: {len(lookup)}명 매핑 준비 완료")
@@ -31,6 +41,21 @@ def get_hr_lookup():
         logger.warning(f"⚠️ HR 마스터 로드 실패: {e}")
     return None
 
+def get_source_field(source_name, target_field, base_dir="/UEBA/common/parser/"):
+    xml_path = os.path.join(base_dir, f"{source_name}.xml")
+    if not os.path.exists(xml_path):
+        return target_field
+        
+    try:
+        tree = ET.parse(xml_path)
+        root = tree.getroot()
+        for field in root.iter('field'):
+            if field.get('target') == target_field:
+                return field.get('source')
+    except Exception as e:
+        logger.error(f"❌ [{source_name}] XML 파싱 에러: {e}")
+    return target_field
+
 def fetch_data(config):
     source_name = config.get("name", "Unknown")
     source_type = config.get("type").lower()
@@ -38,28 +63,23 @@ def fetch_data(config):
     try:
         df = None
         if source_type in ["postgresql", "postgres", "mysql", "mariadb"]:
-            connector = RDBMSConnector(config)
+            # ⭐️ 개별 DB 수집 시에도 dbname 키 보정 (None 에러 방지 핵심)
+            db_conf = config.copy()
+            if "database" in db_conf:
+                db_conf["dbname"] = db_conf["database"]
+                
+            connector = RDBMSConnector(db_conf)
             df = connector.fetch()
             
         elif source_type == "file":
             path_pattern = config.get("path")
-            # [수정] glob을 사용하여 와일드카드 경로에 해당하는 실제 파일들을 모두 찾음
             file_list = glob.glob(path_pattern)
             
             if not file_list:
-                logger.error(f"❌ [{source_name}] 파일을 찾을 수 없습니다: {path_pattern}")
-                # 디버깅을 위해 상위 디렉토리 상태 확인 로그 추가
-                base_path = "/UEBA/data/remote_logs"
-                if os.path.exists(base_path):
-                    logger.info(f"🔍 [디버깅] {base_path} 내부 폴더 목록: {os.listdir(base_path)}")
                 return None
 
-            logger.info(f"📂 [{source_name}] 수집 대상 파일 발견: {len(file_list)}개")
-            
-            # 여러 개의 파일을 하나로 통합하여 읽기
             df_list = []
             for file_path in file_list:
-                # 개별 파일 처리를 위해 임시 설정 생성
                 temp_config = config.copy()
                 temp_config['path'] = file_path
                 connector = FileConnector(temp_config)
@@ -70,28 +90,21 @@ def fetch_data(config):
             if df_list:
                 df = pd.concat(df_list, ignore_index=True)
 
-        # 수집된 데이터가 있을 경우 HR 매핑 처리
         if df is not None and not df.empty:
             hr_lookup = get_hr_lookup()
             
-            if "user_id" in df.columns:
-                if hr_lookup:
-                    if "emp_id" not in df.columns:
-                        df["emp_id"] = df["user_id"]
-                    
-                    df['user_id'] = df['user_id'].astype(str).map(hr_lookup).fillna(df['user_id'])
-                    
-                    # 샘플 로깅
-                    sample_user = df['user_id'].iloc[0]
-                    logger.info(f"✨ [{source_name}] 매핑 완료 (샘플: {sample_user})")
-                else:
-                    df['user_id'] = df['user_id'].apply(
-                        lambda x: f"가상유저_{str(x)[-3:]}" if str(x).startswith("EMP") else x
-                    )
+            if hr_lookup:
+                src_uid_col = get_source_field(source_name, "user_id")
+                src_user_col = get_source_field(source_name, "emp_name") # 차트용 emp_name 기준
+                
+                if src_uid_col in df.columns:
+                    if src_user_col not in df.columns:
+                        df[src_user_col] = df[src_uid_col].astype(str).map(hr_lookup)
+                    else:
+                        df[src_user_col] = df[src_user_col].fillna(df[src_uid_col].astype(str).map(hr_lookup))
+                
         return df
 
     except Exception as e:
         logger.error(f"❌ [{source_name}] 수집 중 에러: {str(e)}")
-        import traceback
-        logger.error(traceback.format_exc())
         return None
