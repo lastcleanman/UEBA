@@ -10,7 +10,7 @@
     "table_name": "employees",        
     "watermark_col": "emp_id",        
     "watermark_default": "0",
-    "enabled": true
+    "enabled": false
   },
   {
     "name": "ueba_mariaDB",
@@ -23,6 +23,6 @@
     "table_name": "sj_ueba_hr", 
     "watermark_col": "emp_id",          
     "watermark_default": "0",
-    "enabled": true
+    "enabled": false
   }
 ]
